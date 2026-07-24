@@ -1,0 +1,54 @@
+# Worktrees (ephemeral, never commit)
+worktrees/
+runs/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+/runs
+/worktree
+/backend/tests
+/backend/scripts
+/REFERENCE
+/docs
+/ai_sdlc_automation.egg-info
+/.mypy_cache
+/.ruff_cache
+# Virtual environment (uv uses .venv by default)
+.venv/
+venv/
+env/
+
+# Environment variables (secrets)
+.env
+backend/.env
+
+# Database
+*.db
+*.sqlite3
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/settings.json
+.idea/
+
+# Node (testRepo worktree leftovers)
+node_modules/
+
+# LangGraph / LangSmith
+.langsmith/
+.git.backup/

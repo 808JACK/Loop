@@ -1,0 +1,92 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["src*"]
+
+[project]
+name = "ai-sdlc-automation"
+version = "0.1.0"
+description = "AI SDLC Automation Backend - Issue to PR automation"
+authors = [
+    {name = "Your Name", email = "your.email@example.com"}
+]
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+dependencies = [
+    # Data validation
+    "pydantic",
+    "pydantic-settings",
+    # Database
+    "sqlalchemy",
+    "psycopg2-binary",
+    "alembic",
+    # AI/LLM
+    "langchain>=1.2.17",
+    "langchain-core",
+    "langchain-community>=0.4.1",
+    "langchain-groq",
+    "langchain-ollama",
+    "langchain-openai",
+    "langchain-anthropic>=1.4.3",
+    "langgraph>=1.1.10",
+    # Jira/Confluence Integration
+    "atlassian-python-api",
+    # Queue
+    "redis",
+    # Git Integration
+    "PyGithub",
+    "python-gitlab",
+    # Logging
+    "structlog",
+    # Utilities
+    "python-dotenv",
+    "httpx",
+    "langchain-anthropic>=1.4.8",
+    # API/Webhook
+    "fastapi",
+    "uvicorn[standard]",
+    # Supabase
+    "supabase",
+]
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    "black",
+    "ruff",
+    "mypy",
+    "types-redis",
+    "bandit",
+    "flake8",
+    "isort",
+    "pre-commit",
+]
+
+[tool.black]
+line-length = 100
+target-version = ['py310', 'py311', 'py312']
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP"]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+exclude = ["venv", ".venv", "worktrees", "scripts"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+asyncio_mode = "auto"
