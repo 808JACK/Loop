@@ -35,6 +35,7 @@ class PhaseExecution(Base):
     phase_execution_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
+    workspace_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     execution_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("executions.execution_id", ondelete="CASCADE"),
@@ -64,6 +65,7 @@ class PhaseExecution(Base):
         """Convert model to dictionary."""
         return {
             "phase_execution_id": str(self.phase_execution_id),
+            "workspace_id": self.workspace_id,
             "execution_id": str(self.execution_id),
             "phase_id": self.phase_id,
             "status": self.status.value if self.status else None,

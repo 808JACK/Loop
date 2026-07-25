@@ -263,6 +263,22 @@ class PostgresCheckpointer(BaseCheckpointSaver):
         except Exception as e:
             logger.error(f"Error getting database session: {e}")
 
+    async def alist(
+        self,
+        config: RunnableConfig | None,
+        *,
+        filter: dict[str, Any] | None = None,
+        before: RunnableConfig | None = None,
+        limit: int | None = None,
+    ):
+        """Async iterator wrapper around list()."""
+        for tuple_item in self.list(config, filter=filter, before=before, limit=limit):
+            yield tuple_item
+
+    async def aget_tuple(self, config: RunnableConfig) -> CheckpointTuple | None:
+        """Async wrapper around get_tuple()."""
+        return self.get_tuple(config)
+
     def delete(self, config: RunnableConfig) -> bool:
         """
         Delete a checkpoint.

@@ -20,7 +20,8 @@ class ExecutionLog(Base):
     __tablename__ = "execution_logs"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    execution_id: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
+    workspace_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    execution_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     log_content: Mapped[str] = mapped_column(Text, nullable=False)
     file_size: Mapped[int] = mapped_column(Integer, nullable=False)
     repo_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
@@ -33,6 +34,7 @@ class ExecutionLog(Base):
         """Convert execution log to dictionary."""
         return {
             "id": str(self.id),
+            "workspace_id": self.workspace_id,
             "execution_id": self.execution_id,
             "log_content": self.log_content,
             "file_size": self.file_size,

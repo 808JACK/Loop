@@ -284,22 +284,40 @@ def _github_pr(
     except Exception:
         logger.error(f"Cannot parse GitHub URL: {repo_url}")
         return None
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+
+    # Auto-detect default branch if base is master vs main
+    base_branch = "main"
+    try:
+        repo_resp = httpx.get(
+            f"https://api.github.com/repos/{owner}/{repo}",
+            headers=headers,
+            timeout=10,
+        )
+        if repo_resp.status_code == 200:
+            base_branch = repo_resp.json().get("default_branch") or "main"
+        else:
+            base_branch = "master"
+    except Exception as ex:
+        logger.warning(f"Could not fetch repo default branch from GitHub: {ex}")
+        base_branch = "master"
+
     try:
         summary_text = " ".join((issue_summary or "").split()).strip()
         summary_text = summary_text or "AI-generated implementation"
         title_str = f"{infer_commit_type(issue_summary, roadmap)}: {summary_text}"
         resp = httpx.post(
             f"https://api.github.com/repos/{owner}/{repo}/pulls",
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Accept": "application/vnd.github+json",
-                "X-GitHub-Api-Version": "2022-11-28",
-            },
+            headers=headers,
             json={
                 "title": title_str[:200],
                 "body": _build_pr_body(issue_key, issue_summary, roadmap, touched_paths),
                 "head": branch_name,
-                "base": "main",
+                "base": base_branch,
                 "draft": True,
             },
             timeout=20,

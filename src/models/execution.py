@@ -61,6 +61,7 @@ class Execution(Base):
     execution_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
+    workspace_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     issue_key: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     idempotency_key: Mapped[str] = mapped_column(
         String(255), nullable=False, unique=True, index=True
@@ -103,6 +104,7 @@ class Execution(Base):
         """Convert model to dictionary."""
         return {
             "execution_id": str(self.execution_id),
+            "workspace_id": self.workspace_id,
             "issue_key": self.issue_key,
             "idempotency_key": self.idempotency_key,
             "status": self.status.value if self.status else None,

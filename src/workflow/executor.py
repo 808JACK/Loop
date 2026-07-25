@@ -132,7 +132,31 @@ def _create_worktree(repo_url: str, branch: str, execution_id: str, issue_key: s
         cmd = ["git", "-C", main_repo, "worktree", "add", worktree_path, ai_branch]
         logger.info(f"Creating worktree from existing branch {ai_branch}")
     else:
-        origin_branch = f"origin/{branch}"
+        # Auto-detect the actual default remote branch (master or main)
+        try:
+            head_result = subprocess.run(  # nosec B603, B607
+                ["git", "-C", main_repo, "symbolic-ref", "refs/remotes/origin/HEAD"],
+                capture_output=True, text=True,
+            )
+            if head_result.returncode == 0:
+                # refs/remotes/origin/master -> master
+                detected = head_result.stdout.strip().split("/")[-1]
+            else:
+                # Fall back: check if origin/master or origin/main exists
+                for candidate in ("master", "main", branch):
+                    check = subprocess.run(  # nosec B603, B607
+                        ["git", "-C", main_repo, "show-ref", "--verify", "--quiet", f"refs/remotes/origin/{candidate}"],
+                        capture_output=True,
+                    )
+                    if check.returncode == 0:
+                        detected = candidate
+                        break
+                else:
+                    detected = branch
+        except Exception:
+            detected = branch
+
+        origin_branch = f"origin/{detected}"
         cmd = [
             "git",
             "-C",

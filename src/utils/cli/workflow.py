@@ -98,7 +98,7 @@ async def resume_execution(execution_id: str, checkpoint_id: str | None = None) 
             print(f"  {RED}❌{RESET}  Execution not found: {execution_id}")
             return execution_id
 
-        if execution.status not in [ExecutionStatus.PAUSED, ExecutionStatus.FAILED]:
+        if execution.status not in [ExecutionStatus.PAUSED, ExecutionStatus.FAILED, ExecutionStatus.RUNNING]:
             print(
                 f"  {YELLOW}⚠️{RESET}  Execution status is {execution.status.value}, cannot resume"
             )

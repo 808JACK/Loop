@@ -4,6 +4,7 @@ Configuration management for AI SDLC Automation.
 Environment-based configuration with type safety and validation.
 """
 
+import os
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -112,6 +113,10 @@ class Settings(BaseSettings):
     jira_repo_name_fields: str = "customfield_10101,customfield_10039"
     jira_reviewer_fields: str = "customfield_10102,customfield_10040"
     github_repo_owner: str | None = None
+    # Jira OAuth 2.0
+    jira_oauth_client_id: str | None = None
+    jira_oauth_client_secret: str | None = None
+    frontend_url: str = "http://localhost:5173"
 
     # Git/PR Platform (GitHub/GitLab/Bitbucket)
     git_platform: str = Field(default="github", pattern="^(github|gitlab|bitbucket)$")
@@ -126,7 +131,7 @@ class Settings(BaseSettings):
     )
 
     # Sandbox/Worktree
-    worktree_base_path: str = "/home/sarthakbehare/FLUX/worktrees"  # nosec B108
+    worktree_base_path: str = os.path.join(os.path.expanduser("~"), "LOOP", "worktrees")  # nosec B108
     sandbox_type: str = Field(default="docker", pattern="^(docker|firecracker|none)$")
 
     # Execution Limits

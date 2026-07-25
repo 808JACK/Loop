@@ -38,6 +38,12 @@ if os.getenv("LANGSMITH_TRACING", "false").lower() == "true":
     langsmith_project = os.getenv("LANGSMITH_PROJECT")
     if langsmith_project:
         os.environ["LANGCHAIN_PROJECT"] = langsmith_project
+
+# ── One-time setup: ensure worktree directories exist ────────────────────────
+for _subdir in ("repos", "runs"):
+    _dir = os.path.join(settings.worktree_base_path, _subdir)
+    os.makedirs(_dir, exist_ok=True)
+
 from src.utils.cli import (  # noqa: E402
     confirm,
     interactive_picker,
@@ -82,9 +88,10 @@ async def main() -> None:
     )
     parser.add_argument("--yes", action="store_true", help="Skip all confirmation prompts")
     parser.add_argument(
-        "--checkpoint",
-        metavar="CHECKPOINT_ID",
-        help="Resume from a specific checkpoint (use with --resume)",
+        "--port",
+        type=int,
+        default=8090,
+        help="Port to run the webhook server on (default: 8090)",
     )
     args = parser.parse_args()
 
@@ -95,14 +102,16 @@ async def main() -> None:
         from src.api.server import app
 
         print_banner()
-        print(f"  {GREEN}🚀{RESET}  Starting webhook server...")
+        print(f"  {GREEN}🚀{RESET}  Starting webhook server on port {args.port}...")
         print(f"  {DIM}Webhook endpoints:{RESET}")
-        print(f"    - GitHub: /api/v1/webhook/github")
-        print(f"    - GitLab: /api/v1/webhook/gitlab")
-        print(f"    - Bitbucket: /api/v1/webhook/bitbucket")
-        print(f"  {DIM}Health check: /health{RESET}\n")
+        print(f"    - GitHub: http://localhost:{args.port}/api/v1/webhook/github")
+        print(f"    - GitLab: http://localhost:{args.port}/api/v1/webhook/gitlab")
+        print(f"    - Bitbucket: http://localhost:{args.port}/api/v1/webhook/bitbucket")
+        print(f"  {DIM}Health check: http://localhost:{args.port}/health{RESET}\n")
 
-        uvicorn.run(app, host="0.0.0.0", port=8000)
+        config = uvicorn.Config(app, host="0.0.0.0", port=args.port, log_level="info")
+        server = uvicorn.Server(config)
+        await server.serve()
         return
 
     # ── banner ────────────────────────────────────────────────────────────────

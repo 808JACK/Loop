@@ -22,7 +22,8 @@ class ExecutionMemory(Base):
     memory_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    issue_key: Mapped[str] = mapped_column(String(255), nullable=False, unique=True, index=True)
+    workspace_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    issue_key: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     repo: Mapped[str] = mapped_column(String(512), nullable=False, index=True)
 
     executions: Mapped[dict] = mapped_column(JSONB, nullable=False, default=list)
@@ -36,6 +37,7 @@ class ExecutionMemory(Base):
         """Convert model to dictionary."""
         return {
             "memory_id": str(self.memory_id),
+            "workspace_id": self.workspace_id,
             "issue_key": self.issue_key,
             "repo": self.repo,
             "executions": self.executions,

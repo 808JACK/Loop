@@ -32,6 +32,7 @@ class StageEventLog(Base):
     event_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
+    workspace_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     execution_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("executions.execution_id", ondelete="CASCADE"),
@@ -61,6 +62,7 @@ class StageEventLog(Base):
         """Convert model to dictionary."""
         return {
             "event_id": str(self.event_id),
+            "workspace_id": self.workspace_id,
             "execution_id": str(self.execution_id),
             "phase_execution_id": str(self.phase_execution_id) if self.phase_execution_id else None,
             "node_name": self.node_name,

@@ -1,5 +1,6 @@
 """Project Memory Service - manages per-repo knowledge store."""
 
+import logging
 import os
 import subprocess  # nosec B404
 from typing import Any, cast
@@ -10,119 +11,63 @@ from src.core.database.base import get_db
 from src.models.project_memory import ProjectMemory
 from src.utils import normalize_paths
 
+logger = logging.getLogger(__name__)
+
 # Compact the rolling window once we accumulate this many entries
 PROJECT_MEMORY_COMPACT_AFTER: int = 3
 # How many recent entries to keep after compaction
 PROJECT_MEMORY_RECENT_WINDOW: int = 5
 
 
-def analyze_project_structure(worktree_path: str) -> str:
+def analyze_project_structure(worktree_path: str, max_depth: int = 3) -> str:
     """
-    Analyze the repository structure and create a compact summary.
-
-    Args:
-        worktree_path: Path to the repository worktree
-
-    Returns:
-        Compact string summary of project structure
+    Analyze the repository structure and create a detailed hierarchical tree summary.
     """
     if not worktree_path or not os.path.exists(worktree_path):
         return "Project structure not available."
 
-    try:
-        # Get directory tree structure
-        result = subprocess.run(  # nosec B603, B607
-            [
-                "find",
-                ".",
-                "-not",
-                "-path",
-                "./.git*",
-                "-not",
-                "-path",
-                "./node_modules*",
-                "-not",
-                "-path",
-                "./.ai-sdlc*",
-                "-not",
-                "-path",
-                "./venv*",
-                "-not",
-                "-path",
-                "./.venv*",
-                "-type",
-                "d",
-            ],
-            cwd=worktree_path,
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
+    ignored_dirs = {
+        ".git", "node_modules", "target", "build", "dist", ".idea", ".vscode",
+        "venv", ".venv", ".ai-sdlc", "__pycache__", ".next", "out"
+    }
 
-        dirs = result.stdout.strip().splitlines()
+    lines = []
 
-        # Get file types by extension
-        file_result = subprocess.run(  # nosec B603, B607
-            [
-                "find",
-                ".",
-                "-not",
-                "-path",
-                "./.git*",
-                "-not",
-                "-path",
-                "./node_modules*",
-                "-not",
-                "-path",
-                "./.ai-sdlc*",
-                "-not",
-                "-path",
-                "./venv*",
-                "-not",
-                "-path",
-                "./.venv*",
-                "-type",
-                "f",
-            ],
-            cwd=worktree_path,
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
+    def _build_tree(dir_path: str, prefix: str = "", current_depth: int = 1):
+        if current_depth > max_depth:
+            return
+        try:
+            entries = sorted([
+                e for e in os.listdir(dir_path)
+                if e not in ignored_dirs and not e.startswith(".DS_Store")
+            ])
+        except Exception:
+            return
 
-        files = file_result.stdout.strip().splitlines()
+        dirs = [e for e in entries if os.path.isdir(os.path.join(dir_path, e))]
+        files = [e for e in entries if os.path.isfile(os.path.join(dir_path, e))]
 
-        # Analyze structure
-        structure_parts = []
+        display_items = [(d, True) for d in dirs] + [(f, False) for f in files[:8]]
+        if len(files) > 8:
+            display_items.append((f"... (+{len(files) - 8} more files)", False))
 
-        # Top-level directories
-        top_level = set()
-        for d in dirs:
-            parts = d.split("/")
-            if len(parts) == 2 and parts[1]:  # ./dirname
-                top_level.add(parts[1])
+        count = len(display_items)
+        for i, (item, is_dir) in enumerate(display_items):
+            is_last = (i == count - 1)
+            connector = "└── " if is_last else "├── "
+            if is_dir and not item.startswith("..."):
+                lines.append(f"{prefix}{connector}{item}/")
+                new_prefix = prefix + ("    " if is_last else "│   ")
+                _build_tree(os.path.join(dir_path, item), new_prefix, current_depth + 1)
+            else:
+                lines.append(f"{prefix}{connector}{item}")
 
-        if top_level:
-            structure_parts.append(f"Top-level dirs: {', '.join(sorted(top_level))}")
+    rel_name = os.path.basename(os.path.abspath(worktree_path))
+    lines.append(f"{rel_name}/")
+    _build_tree(worktree_path)
 
-        # File type analysis
-        extensions: dict[str, int] = {}
-        for f in files:
-            ext = f.split(".")[-1] if "." in f else "no-ext"
-            extensions[ext] = extensions.get(ext, 0) + 1
-
-        if extensions:
-            top_exts = sorted(extensions.items(), key=lambda x: -x[1])[:5]
-            ext_summary = ", ".join(f".{ext} ({count})" for ext, count in top_exts)
-            structure_parts.append(f"File types: {ext_summary}")
-
-        # Total counts
-        structure_parts.append(f"Total dirs: {len(dirs)}, files: {len(files)}")
-
-        return ". ".join(structure_parts)
-
-    except Exception as e:
-        return f"Project structure analysis failed: {str(e)}"
+    tree_str = "\n".join(lines)
+    return tree_str if len(tree_str) <= 3000 else tree_str[:2950] + "\n... (truncated)"
 
 
 def _path_bucket(path: str) -> str:
@@ -375,6 +320,11 @@ def update_project_memory(repo_url: str, updates: dict[str, Any]) -> bool:
                 setattr(memory, key, value)
 
         db.commit()
+        logger.info(
+            "💾 Saved updates to 'project_memory' table in Supabase DB for %s (updated fields: %s)",
+            repo_url,
+            ", ".join(updates.keys()),
+        )
         return True
     except Exception:
         db.rollback()
@@ -383,9 +333,117 @@ def update_project_memory(repo_url: str, updates: dict[str, Any]) -> bool:
         db.close()
 
 
+def build_project_memory_with_ai(
+    repo_url: str, worktree_path: str, repo_files: str | None = None, force: bool = False
+) -> dict[str, Any]:
+    """
+    Dynamically analyze repository structure using LLM agent to generate rich,
+    accurate project_type, architecture_summary, module_summaries, and conventions.
+    100% agentic — works for any tech stack or project framework.
+    """
+    if not worktree_path or not os.path.exists(worktree_path):
+        return {}
+
+    # Skip LLM re-analysis if memory is already populated in DB (saves tokens)
+    if not force:
+        db = next(get_db())
+        try:
+            existing = _get_project_memory_record(db, repo_url)
+            if (
+                existing
+                and existing.architecture_summary
+                and existing.project_type
+                and existing.project_type != "unknown"
+            ):
+                logger.info(
+                    "🧠 Project memory already populated for %s — reusing existing context from DB (saving tokens).",
+                    repo_url,
+                )
+                return existing.to_dict()
+        except Exception:
+            pass
+        finally:
+            db.close()
+
+    logger.info(
+        "🧠 Building initial 100%% agentic project memory for %s using LLM architect analysis...",
+        repo_url,
+    )
+    structure = analyze_project_structure(worktree_path)
+
+    # Gather file tree & manifest file sample if not provided
+    if not repo_files:
+        try:
+            top_items = sorted([
+                item for item in os.listdir(worktree_path)
+                if not item.startswith(".") and item not in ("node_modules", "target", "build", "dist", "venv", ".venv")
+            ])
+            # Find manifest files anywhere in top 2 levels
+            manifests = []
+            for root, dirs, files in os.walk(worktree_path):
+                rel_root = os.path.relpath(root, worktree_path)
+                if rel_root.count(os.sep) > 2 or any(p.startswith(".") for p in rel_root.split(os.sep)):
+                    continue
+                for f in files:
+                    if f in ("package.json", "pom.xml", "build.gradle", "Cargo.toml", "go.mod", "pyproject.toml", "requirements.txt", "CMakeLists.txt", "mix.exs", "Dockerfile"):
+                        manifests.append(os.path.join(rel_root, f) if rel_root != "." else f)
+
+            repo_files = f"Top items: {', '.join(top_items)}\nManifest/Key files found: {', '.join(manifests)}"
+        except Exception:
+            repo_files = "(unknown structure)"
+
+    try:
+        from langchain_core.messages import HumanMessage, SystemMessage
+
+        from src.core.llm.provider import get_chat_model_for_node
+        from src.utils.json_parser import parse_llm_json
+
+        llm = get_chat_model_for_node("RoadmapAgent", temperature=0.2)
+        system_prompt = (
+            "You are an expert principal software architect. Your task is to analyze the provided "
+            "repository file listing, manifests, and directory structure summary to determine the exact tech stack, "
+            "architecture, module responsibilities, and coding conventions.\n\n"
+            "Analyze the project autonomously without assuming any specific stack.\n"
+            "Return ONLY valid JSON matching this schema:\n"
+            "{\n"
+            '  "project_type": "Specific tech stack, framework & language (e.g. Java / Spring Boot Microservices, Rust / Actix Web, Go API Gateway, Next.js Frontend, Python FastAPI)",\n'
+            '  "architecture_summary": "2-3 sentence overview of project architecture and module organization",\n'
+            '  "module_summaries": {"module_or_dir_name": "Concise summary of module responsibility"},\n'
+            '  "conventions": ["Observed pattern or convention 1", "Observed pattern or convention 2"]\n'
+            "}"
+        )
+
+        user_prompt = f"Directory Structure Summary:\n{structure}\n\nRepository File Context:\n{repo_files[:2500]}"
+
+        res = llm.invoke([SystemMessage(content=system_prompt), HumanMessage(content=user_prompt)])
+        content_str = res.content if hasattr(res, "content") else str(res)
+        parsed = parse_llm_json(content_str)
+
+        if isinstance(parsed, dict) and parsed.get("architecture_summary"):
+            ai_updates = {
+                "project_structure": structure,
+                "project_type": parsed.get("project_type", "Software Application"),
+                "architecture_summary": parsed.get("architecture_summary"),
+                "module_summaries": parsed.get("module_summaries", {}),
+                "conventions": parsed.get("conventions", []),
+                "compact_summary": f"Structure: {structure}. Architecture: {parsed.get('architecture_summary')}",
+            }
+            update_project_memory(repo_url, ai_updates)
+            return ai_updates
+    except Exception as e:
+        logger.warning(f"Could not generate AI project memory: {e}")
+
+    fallback_updates = {
+        "project_structure": structure,
+        "compact_summary": f"Structure: {structure}.",
+    }
+    update_project_memory(repo_url, fallback_updates)
+    return fallback_updates
+
+
 def update_project_structure(repo_url: str, worktree_path: str) -> bool:
     """
-    Update the static project structure in project memory.
+    Update the static project structure and trigger AI project memory generation.
 
     Args:
         repo_url: Repository URL
@@ -394,8 +452,8 @@ def update_project_structure(repo_url: str, worktree_path: str) -> bool:
     Returns:
         True if successful, False otherwise
     """
-    structure = analyze_project_structure(worktree_path)
-    return update_project_memory(repo_url, {"project_structure": structure})
+    res = build_project_memory_with_ai(repo_url, worktree_path)
+    return bool(res)
 
 
 def add_execution_to_project_memory(repo_url: str, execution_data: dict[str, Any]) -> bool:
@@ -431,6 +489,10 @@ def add_execution_to_project_memory(repo_url: str, execution_data: dict[str, Any
         _compact_project_memory(memory)
 
         db.commit()
+        logger.info(
+            "💾 Updated 'project_memory' table (recent_changes & compaction) in Supabase DB for %s",
+            repo_url,
+        )
         return True
     except Exception:
         db.rollback()

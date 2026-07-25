@@ -20,13 +20,13 @@ def normalize_reviewers(reviewers: Any) -> list[str]:
 
 
 def normalize_paths(paths: Any) -> list[str]:
-    """Normalize paths input to a list of strings."""
+    """Normalize paths input to a list of strings, stripping quotes and whitespace."""
     if not isinstance(paths, list):
         return []
     cleaned: list[str] = []
     for path in paths:
         if isinstance(path, str):
-            path = path.strip()
+            path = path.strip().strip('"').strip("'")
             if path:
                 cleaned.append(path)
     return cleaned
