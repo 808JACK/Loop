@@ -90,8 +90,8 @@ async def main() -> None:
     parser.add_argument(
         "--port",
         type=int,
-        default=8090,
-        help="Port to run the webhook server on (default: 8090)",
+        default=8000,
+        help="Port to run the webhook server on (default: 8000)",
     )
     args = parser.parse_args()
 

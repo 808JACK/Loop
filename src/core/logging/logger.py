@@ -174,3 +174,25 @@ def set_execution_id(execution_id: str):
 def clear_execution_id():
     """Clear the execution ID from logging context."""
     execution_id_var.set("")
+
+
+def log_user_event(execution_id: str, tag: str, msg: str, level: str = "info"):
+    """
+    Dual-level logger helper:
+    1. Writes full detailed message to internal dev logger.
+    2. Pushes sanitized event to PostgreSQL execution_logs table for UI display.
+    """
+    logger = get_logger("execution")
+    if level == "error":
+        logger.error(msg, tag=tag, execution_id=execution_id)
+    elif level == "warn":
+        logger.warning(msg, tag=tag, execution_id=execution_id)
+    else:
+        logger.info(msg, tag=tag, execution_id=execution_id)
+
+    try:
+        from src.utils.log_storage import append_execution_event
+        append_execution_event(execution_id=execution_id, tag=tag, msg=msg, level=level)
+    except Exception as e:
+        logger.error("Failed to append sanitized user event", error=str(e))
+
