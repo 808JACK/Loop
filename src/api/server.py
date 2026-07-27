@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from src.api import webhook_router
 from src.api.auth import router as auth_router
+from src.api.websocket import router as websocket_router
 from src.core.logging.logger import get_logger
 
 # Import all models to ensure they're registered with Base before database initialization
@@ -49,6 +50,7 @@ app.add_middleware(
 # Include webhook routers
 app.include_router(webhook_router, prefix="/api/v1")
 app.include_router(auth_router, prefix="/api/v1")
+app.include_router(websocket_router, prefix="/api/v1")
 
 
 @app.get("/")

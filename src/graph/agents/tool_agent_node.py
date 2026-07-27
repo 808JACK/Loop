@@ -82,6 +82,20 @@ def _parse_json_from_content(content: str) -> dict | None:
         return None
 
 
+def _fix_underscore_prefix(content: str) -> str:
+    """Remove _next parameter from function signatures as a post-processing safety net.
+    
+    This is a simple regex-based fix for when the agent ignores instructions
+    and prefixes unused parameters with underscore instead of removing them.
+    """
+    # Remove _next parameter from function signatures
+    # Pattern: function foo(a, _next, b) -> function foo(a, b)
+    content = re.sub(r',\s*_next\b', '', content)
+    content = re.sub(r'_next,\s*', '', content)
+    content = re.sub(r'\(\s*_next\s*\)', '()', content)
+    return content
+
+
 def _make_bound_tools(worktree_path: str):
     """
     Return tool instances with worktree_path pre-filled.
@@ -265,7 +279,49 @@ def tool_agent_node(state: ExecutionState) -> ExecutionState:
             sanity_context = "\n\n## Previous Sanity Check Failures (CRITICAL - MUST FIX)\n"
             sanity_context += "The previous execution of this phase failed sanity checks. You MUST fix these issues:\n"
             sanity_context += "\n".join(sanity_failures)
-            sanity_context += "\n\nFix these specific issues. Use edit_file or write_file as needed to resolve the linting errors."
+            sanity_context += "\n\n## IMPORTANT FIX GUIDELINES\n"
+            
+            # JavaScript/TypeScript guidelines
+            sanity_context += "### JavaScript/TypeScript (ESLint)\n"
+            sanity_context += "For 'no-unused-vars' errors:\n"
+            sanity_context += "- WRONG: Prefixing with underscore (_next) - ESLint still reports this as unused\n"
+            sanity_context += "- CORRECT: Remove the parameter entirely from the function signature\n"
+            sanity_context += "- CORRECT: Use the parameter in the function body if it's needed\n"
+            sanity_context += "\nFor 'no-unused-imports' errors:\n"
+            sanity_context += "- WRONG: Commenting out imports - still causes errors\n"
+            sanity_context += "- CORRECT: Remove the entire import statement\n"
+            sanity_context += "- CORRECT: Use the imported value in your code\n"
+            
+            # Go guidelines
+            sanity_context += "\n### Go (golint, go vet)\n"
+            sanity_context += "For unused variable errors:\n"
+            sanity_context += "- WRONG: Prefixing with underscore (_var) - still reported as unused\n"
+            sanity_context += "- CORRECT: Remove the variable entirely\n"
+            sanity_context += "- CORRECT: Use the variable in your code\n"
+            sanity_context += "\nFor unused parameter errors:\n"
+            sanity_context += "- WRONG: Prefixing with underscore (_param)\n"
+            sanity_context += "- CORRECT: Remove the parameter from function signature\n"
+            sanity_context += "- CORRECT: Use the parameter in function body\n"
+            sanity_context += "\nFor missing return errors:\n"
+            sanity_context += "- WRONG: Returning nil when a value is expected\n"
+            sanity_context += "- CORRECT: Return the expected value type\n"
+            sanity_context += "- CORRECT: Add error handling if returning error\n"
+            
+            # Python guidelines
+            sanity_context += "\n### Python (pylint, flake8)\n"
+            sanity_context += "For unused variable errors:\n"
+            sanity_context += "- WRONG: Prefixing with underscore (_var)\n"
+            sanity_context += "- CORRECT: Remove the variable entirely\n"
+            sanity_context += "- CORRECT: Use the variable in your code\n"
+            sanity_context += "\nFor unused import errors:\n"
+            sanity_context += "- WRONG: Commenting out imports\n"
+            sanity_context += "- CORRECT: Remove the entire import statement\n"
+            sanity_context += "- CORRECT: Use the imported module/function\n"
+            sanity_context += "\nFor missing docstring errors:\n"
+            sanity_context += "- WRONG: Adding empty docstring ''\n"
+            sanity_context += "- CORRECT: Add meaningful docstring describing function/class\n"
+            
+            sanity_context += "\nFix these specific issues. Use edit_file or write_file as needed to resolve the linting errors."
             
             system_prompt = system_prompt_ref.compile(
                 issue_key=state.get("issue_key", ""),
@@ -321,6 +377,11 @@ def tool_agent_node(state: ExecutionState) -> ExecutionState:
                 output = messages[-1].content if messages and len(messages) > 0 else "No output"
                 logger.info(f"✅ Fix step completed")
                 logger.info(f"   Output: {output[:200]}...")
+
+                # Post-processing safety net for common mistakes
+                if output:
+                    output = _fix_underscore_prefix(output)
+                    logger.debug("Applied post-processing safety net for underscore prefix")
 
             except Exception as e:
                 logger.error(f"Fix step failed: {e}")

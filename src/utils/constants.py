@@ -34,7 +34,7 @@ RESTORE_POS = "\033[u"
 # ---------------------------------------------------------------------------
 
 # Max retries per phase before escalating instead of looping
-MAX_PHASE_RETRIES = 3
+MAX_PHASE_RETRIES = 10
 
 # File extension groups used when scanning changed files
 JS_TS_EXTENSIONS = (".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs")

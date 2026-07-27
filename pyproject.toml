@@ -48,8 +48,12 @@ dependencies = [
     # API/Webhook
     "fastapi",
     "uvicorn[standard]",
+    "websockets",
     # Supabase
     "supabase",
+    # Authentication
+    "python-jose[cryptography]",
+    "passlib[bcrypt]",
 ]
 
 [dependency-groups]

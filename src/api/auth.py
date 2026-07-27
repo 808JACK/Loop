@@ -13,8 +13,10 @@ from typing import Any
 from urllib.parse import urlencode
 
 import httpx
-from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
+from src.core.auth.jwt import create_access_token, create_refresh_token, verify_token
 from src.core.database.base import SessionLocal
 from src.core.logging.logger import get_logger
 from src.models.execution import Execution
@@ -24,6 +26,7 @@ from src.settings import settings
 
 logger = get_logger("auth")
 router = APIRouter()
+security = HTTPBearer()
 
 # In-memory storage for OAuth state (in production, use Redis)
 _oauth_state_store: dict[str, dict[str, Any]] = {}
@@ -199,6 +202,7 @@ async def jira_callback(request: Request):
     db = SessionLocal()
     try:
         workspace = db.query(Workspace).filter(Workspace.workspace_id == workspace_id).first()
+        is_new_user = False
         
         if not workspace:
             workspace = Workspace(
@@ -220,6 +224,7 @@ async def jira_callback(request: Request):
             )
             db.add(workspace)
             db.commit()
+            is_new_user = True
             logger.info(f"Created new workspace: {workspace_id}")
         else:
             # Refresh all credentials and profile data
@@ -242,6 +247,17 @@ async def jira_callback(request: Request):
     
     logger.info("Successfully completed Jira OAuth with workspace creation")
     
+    # Create JWT tokens for session management
+    jwt_access_token = create_access_token({
+        "workspace_id": workspace_id,
+        "user_email": user_email,
+        "user_name": user_name,
+    })
+    jwt_refresh_token = create_refresh_token({
+        "workspace_id": workspace_id,
+        "user_email": user_email,
+    })
+    
     return {
         "access_token": access_token,
         "refresh_token": refresh_token_val,
@@ -256,6 +272,11 @@ async def jira_callback(request: Request):
         "jira_site_name": jira_site_name,
         "jira_cloud_id": jira_cloud_id,
         "jira_url": jira_base,
+        # JWT tokens for session management
+        "jwt_access_token": jwt_access_token,
+        "jwt_refresh_token": jwt_refresh_token,
+        # Flag to indicate if this is a new user
+        "is_new_user": is_new_user,
     }
 
 
@@ -282,12 +303,56 @@ async def jira_refresh(request: Request):
     auth_string = base64.b64encode(f"{client_id}:{client_secret}".encode()).decode()
 
 
+@router.post("/auth/jwt/refresh")
+async def jwt_refresh(request: Request):
+    """
+    Refresh JWT access token using refresh token.
+    """
+    body = await request.json()
+    refresh_token = body.get("refresh_token")
+    
+    if not refresh_token:
+        raise HTTPException(status_code=400, detail="Missing refresh token")
+    
+    # Verify the refresh token
+    payload = verify_token(refresh_token, token_type="refresh")
+    if not payload:
+        raise HTTPException(status_code=401, detail="Invalid or expired refresh token")
+    
+    # Create new access token
+    new_access_token = create_access_token({
+        "workspace_id": payload.get("workspace_id"),
+        "user_email": payload.get("user_email"),
+        "user_name": payload.get("user_name"),
+    })
+    
+    return {"access_token": new_access_token}
+
+
+async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    """Dependency to get current user from JWT token."""
+    token = credentials.credentials
+    payload = verify_token(token, token_type="access")
+    
+    if not payload:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    
+    return {
+        "workspace_id": payload.get("workspace_id"),
+        "user_email": payload.get("user_email"),
+        "user_name": payload.get("user_name"),
+    }
+
+
 @router.get("/executions")
-async def get_executions(request: Request):
+async def get_executions(
+    request: Request,
+    current_user: dict = Depends(get_current_user)
+):
     """
-    Fetch executions for the current workspace.
+    Fetch executions for the current workspace (protected route).
     """
-    workspace_id = request.headers.get("X-Workspace-ID")
+    workspace_id = current_user.get("workspace_id")
     
     db = SessionLocal()
     try:
@@ -308,10 +373,50 @@ async def get_executions(request: Request):
         db.close()
 
 
-@router.get("/executions/{execution_id}")
-async def get_execution_detail(execution_id: str):
+@router.post("/executions/start")
+async def start_execution(
+    request: Request,
+    current_user: dict = Depends(get_current_user)
+):
     """
-    Fetch details for a single execution by ID or issue key.
+    Start a new workflow execution and return execution ID for WebSocket connection.
+    """
+    body = await request.json()
+    issue_key = body.get("issue_key")
+    
+    if not issue_key:
+        raise HTTPException(status_code=400, detail="Missing issue_key")
+    
+    # Create a new execution record
+    db = SessionLocal()
+    try:
+        execution = Execution(
+            issue_key=issue_key,
+            workspace_id=current_user.get("workspace_id"),
+            status="running",
+        )
+        db.add(execution)
+        db.commit()
+        db.refresh(execution)
+        
+        # Return execution ID so frontend can connect to WebSocket
+        return {
+            "execution_id": str(execution.execution_id),
+            "issue_key": execution.issue_key,
+            "status": execution.status,
+            "websocket_url": f"/api/v1/ws/execution/{execution.execution_id}",
+        }
+    finally:
+        db.close()
+
+
+@router.get("/executions/{execution_id}")
+async def get_execution_detail(
+    execution_id: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Fetch details for a single execution by ID or issue key (protected route).
     """
     db = SessionLocal()
     try:
@@ -335,9 +440,12 @@ async def get_execution_detail(execution_id: str):
 
 
 @router.get("/executions/{execution_id}/logs")
-async def get_execution_logs(execution_id: str):
+async def get_execution_logs(
+    execution_id: str,
+    current_user: dict = Depends(get_current_user)
+):
     """
-    Fetch structured execution log traces for a given execution run from DB.
+    Fetch structured execution log traces for a given execution run from DB (protected route).
     """
     db = SessionLocal()
     try:
@@ -379,12 +487,14 @@ async def get_execution_logs(execution_id: str):
 
 
 @router.get("/jira/workspaces")
-async def get_jira_workspaces(request: Request):
+async def get_jira_workspaces(
+    current_user: dict = Depends(get_current_user)
+):
     """
-    Fetch accessible Jira workspaces for the authenticated user.
+    Fetch accessible Jira workspaces for the authenticated user (protected route).
     """
     # Get the access token from the user's workspace
-    workspace_id = request.headers.get("X-Workspace-ID")
+    workspace_id = current_user.get("workspace_id")
     
     if not workspace_id:
         raise HTTPException(status_code=400, detail="Missing workspace ID")
