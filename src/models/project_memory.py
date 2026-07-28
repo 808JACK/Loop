@@ -22,7 +22,6 @@ class ProjectMemory(Base):
     memory_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    workspace_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     repo: Mapped[str] = mapped_column(String(512), nullable=False, index=True)
 
     architecture_summary: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
@@ -42,7 +41,6 @@ class ProjectMemory(Base):
         """Convert model to dictionary."""
         return {
             "memory_id": str(self.memory_id),
-            "workspace_id": self.workspace_id,
             "repo": self.repo,
             "architecture_summary": self.architecture_summary,
             "module_summaries": self.module_summaries,

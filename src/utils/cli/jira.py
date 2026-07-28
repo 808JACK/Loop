@@ -13,6 +13,7 @@ from src.integrations.jira.jira_client import (
 )
 from src.settings import settings
 from src.utils.constants import BOLD, CYAN, RESET
+from src.utils.repo_url import parse_repo_url
 
 
 def _split_candidates(raw: str) -> list[str]:
@@ -71,12 +72,21 @@ async def fetch_ai_ready_issues(repo_url_override: str | None = None) -> list[di
         desc_text = _extract_adf_text(fields.get("description"))
 
         # Fallback description parsing
+        branch: str | None = None
         if not repo_url or not reviewers:
-            desc_repo, desc_reviewers = _parse_description_metadata(desc_text)
-            if not repo_url and desc_repo:
-                repo_url = desc_repo
-            if not reviewers and desc_reviewers:
-                reviewers = desc_reviewers
+            metadata = _parse_description_metadata(desc_text)
+            if not repo_url and metadata.get("repo_url"):
+                repo_url = metadata.get("repo_url")
+            if not reviewers and metadata.get("desc_reviewers"):
+                reviewers = metadata.get("desc_reviewers")
+            if not branch and metadata.get("branch"):
+                branch = metadata.get("branch")
+
+        # Extract branch from repo_url if not already present
+        if repo_url and not branch:
+            clean_url, parsed_branch = parse_repo_url(repo_url)
+            repo_url = clean_url
+            branch = parsed_branch
 
         if not reviewers:
             reviewers = _coerce_text_values(fields.get("assignee"))
@@ -92,6 +102,7 @@ async def fetch_ai_ready_issues(repo_url_override: str | None = None) -> list[di
                 "repo_url": repo_url,
                 "repo_name": repo_name,
                 "requested_reviewers": reviewers,
+                "branch": branch,
             }
         )
 
@@ -105,13 +116,22 @@ async def fetch_manual_issue(issue_key: str, repo_url_override: str | None = Non
     print(f"\n  {CYAN}📥{RESET}  Fetching {BOLD}{issue_key}{RESET} from Jira...")
     data = await get_jira_issue(issue_key)
 
+    # Extract branch from repo_url if not already present
+    repo_url = repo_url_override or data.get("repo_url")
+    branch = data.get("branch")
+    if repo_url and not branch:
+        clean_url, parsed_branch = parse_repo_url(repo_url)
+        repo_url = clean_url
+        branch = parsed_branch
+
     return {
         "key": issue_key,
         "summary": data.get("summary", ""),
         "description": data.get("description", "")[:120],
         "status": data.get("status", ""),
         "priority": "?",
-        "repo_url": repo_url_override or data.get("repo_url"),
+        "repo_url": repo_url,
         "repo_name": data.get("repo_name"),
         "requested_reviewers": data.get("requested_reviewers", []),
+        "branch": branch,
     }

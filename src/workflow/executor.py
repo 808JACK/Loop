@@ -23,6 +23,7 @@ from src.integrations.jira.jira_client import get_jira_issue
 from src.services.locking.lock_manager import LockManager
 from src.services.memory.project_memory_service import get_project_memory
 from src.settings import settings
+from src.utils.repo_url import parse_repo_url
 
 logger = get_logger("workflow_executor")
 
@@ -38,17 +39,67 @@ def _create_worktree(repo_url: str, branch: str, execution_id: str, issue_key: s
     os.makedirs(repos_dir, exist_ok=True)
     os.makedirs(runs_dir, exist_ok=True)
 
-    repo_name = repo_url.rstrip("/").split("/")[-1].removesuffix(".git")
+    # Use branch parameter directly as base_branch
+    base_branch = branch
+
+    # Parse repo URL to get clean URL
+    clean_repo_url, url_branch = parse_repo_url(repo_url)
+
+    # Use parameter branch if provided, otherwise use parsed branch
+    if not base_branch:
+        base_branch = url_branch
+
+    logger.info(f"Using base branch: {base_branch}")
+
+    repo_name = clean_repo_url.rstrip("/").split("/")[-1]
     main_repo = os.path.join(repos_dir, repo_name)
 
     # Add auth if GitHub token is available
-    auth_url = repo_url
-    if settings.github_token and "github.com" in repo_url:
-        auth_url = repo_url.replace("https://", f"https://oauth2:{settings.github_token}@")
+    auth_url = clean_repo_url
+    if settings.github_token and "github.com" in clean_repo_url:
+        auth_url = clean_repo_url.replace("https://", f"https://oauth2:{settings.github_token}@")
 
     if not os.path.exists(main_repo):
-        logger.info(f"Cloning {repo_url} → {main_repo}")
-        subprocess.run(["git", "clone", auth_url, main_repo], check=True, capture_output=True)  # nosec B603, B607
+        # Ensure parent directory exists
+        os.makedirs(repos_dir, exist_ok=True)
+        
+        # Clone with authentication to avoid credential helper issues
+        logger.info(f"Cloning {clean_repo_url} → {main_repo}")
+        clone_cmd = ["git", "-c", "credential.helper=", "clone", auth_url, main_repo]
+
+        # Clean environment to prevent credential issues
+        env = os.environ.copy()
+        env.pop("GIT_ASKPASS", None)
+        env.pop("SSH_ASKPASS", None)
+        # Prevent git from prompting for credentials
+        env["GIT_TERMINAL_PROMPT"] = "0"
+        # Bypass all git config to prevent credential helper interference
+        env["GIT_CONFIG_GLOBAL"] = "/dev/null"
+        env["GIT_CONFIG_SYSTEM"] = "/dev/null"
+
+        try:
+            result = subprocess.run(clone_cmd, check=True, capture_output=True, text=True, env=env)  # nosec B603, B607
+            logger.info("Clone successful")
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Clone failed: {e.stderr}")
+            raise Exception(f"Failed to clone repository: {e.stderr}")
+
+        # If a specific branch was requested, checkout that branch
+        if base_branch:
+            logger.info(f"Checking out branch: {base_branch}")
+            try:
+                subprocess.run(  # nosec B603, B607
+                    ["git", "-C", main_repo, "checkout", base_branch],
+                    check=True,
+                    capture_output=True,
+                    text=True
+                )
+                logger.info(f"Checked out branch: {base_branch}")
+            except subprocess.CalledProcessError as e:
+                logger.warning(f"Could not checkout branch {base_branch}: {e.stderr}")
+                logger.warning(f"Continuing with default branch")
+
+        # Configure git user
         subprocess.run(  # nosec B603, B607
             ["git", "-C", main_repo, "config", "user.email", "ai-sdlc@automation.local"],
             capture_output=True,
@@ -132,31 +183,35 @@ def _create_worktree(repo_url: str, branch: str, execution_id: str, issue_key: s
         cmd = ["git", "-C", main_repo, "worktree", "add", worktree_path, ai_branch]
         logger.info(f"Creating worktree from existing branch {ai_branch}")
     else:
-        # Auto-detect the actual default remote branch (master or main)
-        try:
-            head_result = subprocess.run(  # nosec B603, B607
-                ["git", "-C", main_repo, "symbolic-ref", "refs/remotes/origin/HEAD"],
-                capture_output=True, text=True,
-            )
-            if head_result.returncode == 0:
-                # refs/remotes/origin/master -> master
-                detected = head_result.stdout.strip().split("/")[-1]
-            else:
-                # Fall back: check if origin/master or origin/main exists
-                for candidate in ("master", "main", branch):
-                    check = subprocess.run(  # nosec B603, B607
-                        ["git", "-C", main_repo, "show-ref", "--verify", "--quiet", f"refs/remotes/origin/{candidate}"],
-                        capture_output=True,
-                    )
-                    if check.returncode == 0:
-                        detected = candidate
-                        break
+        # Use base_branch if specified, otherwise auto-detect
+        origin_branch = f"origin/{base_branch}" if base_branch else None
+        
+        if not origin_branch:
+            # Auto-detect the actual default remote branch (master or main)
+            try:
+                head_result = subprocess.run(  # nosec B603, B607
+                    ["git", "-C", main_repo, "symbolic-ref", "refs/remotes/origin/HEAD"],
+                    capture_output=True, text=True,
+                )
+                if head_result.returncode == 0:
+                    # refs/remotes/origin/master -> master
+                    detected = head_result.stdout.strip().split("/")[-1]
+                    origin_branch = f"origin/{detected}"
                 else:
-                    detected = branch
-        except Exception:
-            detected = branch
+                    # Fall back: check if origin/master or origin/main exists
+                    for candidate in ("master", "main"):
+                        check = subprocess.run(  # nosec B603, B607
+                            ["git", "-C", main_repo, "show-ref", "--verify", "--quiet", f"refs/remotes/origin/{candidate}"],
+                            capture_output=True,
+                        )
+                        if check.returncode == 0:
+                            origin_branch = f"origin/{candidate}"
+                            break
+                    else:
+                        origin_branch = "origin/main"
+            except Exception:
+                origin_branch = "origin/main"
 
-        origin_branch = f"origin/{detected}"
         cmd = [
             "git",
             "-C",
@@ -177,7 +232,7 @@ def _create_worktree(repo_url: str, branch: str, execution_id: str, issue_key: s
         logger.error(f"Worktree creation failed: {e}")
         logger.error(f"Command: {cmd}")
         logger.error(f"Stderr: {e.stderr.decode() if e.stderr else 'None'}")
-        raise
+        raise Exception(f"Failed to create worktree: {e}. Cannot proceed without repository access.")
 
     return worktree_path
 
@@ -217,9 +272,22 @@ async def run_workflow(
         except Exception as e:
             logger.warning(f"Could not transition Jira issue to 'In Progress': {e}")
 
-        # Resolve repo_url
+        # Resolve repo_url and branch
         if not repo_url:
             repo_url = issue.get("repo_url") or settings.default_repo_url
+        
+        # Prioritize branch parameter and issue.get("branch") over re-parsing
+        base_branch = branch or issue.get("branch")
+        
+        # Only parse from repo_url if branch is still empty
+        if not base_branch and repo_url:
+            clean_repo_url, parsed_branch = parse_repo_url(repo_url)
+            base_branch = parsed_branch or "main"  # Fall back to main if no branch specified
+            repo_url = clean_repo_url
+        else:
+            clean_repo_url = repo_url
+
+        logger.info(f"Parsed repo URL: {repo_url}, branch: {base_branch}")
 
         # Create or update execution record in database
         from src.models.execution import Execution, ExecutionStatus, LLMProvider
@@ -262,7 +330,7 @@ async def run_workflow(
         # Worktree + lock (skip if resuming)
         if repo_url and not is_resume:
             try:
-                worktree_path = _create_worktree(repo_url, branch, execution_id, issue_key)
+                worktree_path = _create_worktree(repo_url, base_branch, execution_id, issue_key)
                 logger.info(f"Created worktree at {worktree_path}")
 
                 # Update execution record with worktree path
@@ -272,10 +340,10 @@ async def run_workflow(
 
                 # Try to acquire lock but don't fail if we can't
                 lock_manager = LockManager(db)
-                lock_acquired = lock_manager.acquire_lock(repo_url, branch, wait=False)
+                lock_acquired = lock_manager.acquire_lock(repo_url, base_branch, wait=False)
                 if not lock_acquired:
                     logger.warning(
-                        f"Could not acquire lock for {repo_url}:{branch} - proceeding without lock"
+                        f"Could not acquire lock for {repo_url}:{base_branch} - proceeding without lock"
                     )
             except Exception as e:
                 logger.warning(f"Worktree creation failed: {e}")
@@ -289,7 +357,7 @@ async def run_workflow(
             else:
                 logger.warning("Could not find execution record, will create new worktree")
                 if repo_url:
-                    worktree_path = _create_worktree(repo_url, branch, execution_id, issue_key)
+                    worktree_path = _create_worktree(repo_url, base_branch, execution_id, issue_key)
                 else:
                     logger.warning("No repo_url available, cannot create worktree")
 
@@ -307,7 +375,8 @@ async def run_workflow(
             "issue_summary": issue_summary,
             "issue_description": issue_description,
             "repo_url": repo_url or "",
-            "branch": branch,
+            "branch": base_branch,
+            "pr_base_branch": base_branch,  # Store for PR targeting
             "worktree_path": worktree_path or "",
             "branch_name": ai_branch_name,
             "status": "roadmapping",

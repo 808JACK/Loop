@@ -25,7 +25,7 @@ from src.settings import settings  # noqa: E402
 
 # =====================================================
 # Edit this to set the issue you want to clear
-ISSUE_ID = "KAN-2"
+ISSUE_ID = "KAN-6"
 # =====================================================
 
 

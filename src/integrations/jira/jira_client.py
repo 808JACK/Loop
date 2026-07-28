@@ -5,12 +5,14 @@ See HLD §4.10 for full specification.
 """
 
 import base64
+import re
 from collections.abc import Iterable
 from typing import Any
 
 import httpx
 
 from src.settings import settings
+from src.utils.repo_url import parse_repo_url
 
 
 class JiraClient:
@@ -33,7 +35,7 @@ class JiraClient:
 
     async def get_issue(self, issue_key: str) -> dict[str, Any]:
         """Fetch issue details from Jira REST API v3."""
-        async with httpx.AsyncClient(timeout=15) as client:
+        async with httpx.AsyncClient(timeout=60) as client:
             response = await client.get(
                 f"{self.base_url}/rest/api/3/issue/{issue_key}",
                 headers=self.headers,
@@ -61,12 +63,14 @@ class JiraClient:
         # Supports bullet-point format written directly in the Jira description:
         #   • repo_url: https://github.com/org/repo
         #   • requested_reviewers: alice, bob
-        if not repo_url or not requested_reviewers:
-            desc_repo, desc_reviewers = _parse_description_metadata(description)
-            if not repo_url and desc_repo:
-                repo_url = desc_repo
-            if not requested_reviewers and desc_reviewers:
-                requested_reviewers = desc_reviewers
+        branch: str | None = None
+        metadata = _parse_description_metadata(description)
+        if not repo_url and metadata.get("repo_url"):
+            repo_url = metadata.get("repo_url")
+        if not requested_reviewers and metadata.get("desc_reviewers"):
+            requested_reviewers = metadata.get("desc_reviewers")
+        if not branch and metadata.get("branch"):
+            branch = metadata.get("branch")
 
         assignee = fields.get("assignee")
         if not requested_reviewers:
@@ -85,6 +89,7 @@ class JiraClient:
             "repo_url": repo_url,
             "repo_name": repo_name,
             "requested_reviewers": requested_reviewers,
+            "branch": branch,
         }
 
     async def post_comment(self, issue_key: str, comment: str) -> dict[str, Any]:
@@ -173,28 +178,70 @@ class JiraClient:
             print(f"Error removing label from {issue_key}: {e}")
             return False
 
+    async def create_issue(
+        self,
+        project_key: str,
+        summary: str,
+        description: str,
+        issue_type: str = "Bug",
+        labels: list[str] | None = None,
+        priority: str = "High",
+    ) -> dict[str, Any]:
+        """Create a new Jira issue."""
+        adf_description = {
+            "version": 1,
+            "type": "doc",
+            "content": [
+                {
+                    "type": "paragraph",
+                    "content": [{"type": "text", "text": description}],
+                }
+            ],
+        }
+
+        payload = {
+            "fields": {
+                "project": {"key": project_key},
+                "summary": summary,
+                "description": adf_description,
+                "issuetype": {"name": issue_type},
+                "priority": {"name": priority},
+            }
+        }
+
+        if labels:
+            payload["fields"]["labels"] = labels
+
+        async with httpx.AsyncClient(timeout=15) as client:
+            response = await client.post(
+                f"{self.base_url}/rest/api/3/issue",
+                headers=self.headers,
+                json=payload,
+            )
+            response.raise_for_status()
+            return response.json()
+
 
 def _split_candidates(raw: str) -> list[str]:
     return [item.strip() for item in raw.split(",") if item.strip()]
 
 
-def _parse_description_metadata(description: str) -> tuple:
+def _parse_description_metadata(description: str) -> dict:
     """
-    Extract repo_url and requested_reviewers from a plain-text Jira description.
+    Extract repo_url, branch, and requested_reviewers from a plain-text Jira description.
 
     Supports bullet-point format written directly in the issue body:
         • repo_url: https://github.com/org/repo
         • requested_reviewers: alice, bob
 
-    Returns (repo_url: str | None, reviewers: list[str])
+    Returns dict with keys: repo_url, branch, desc_reviewers
     """
-    import re
-
     repo_url: str | None = None
+    branch: str | None = None
     reviewers: list[str] = []
 
     if not description:
-        return repo_url, reviewers
+        return {"repo_url": None, "branch": None, "desc_reviewers": None}
 
     # Search for repo_url anywhere in the description text
     # Supports both "repo_url:" and "Repo:" formats
@@ -202,9 +249,13 @@ def _parse_description_metadata(description: str) -> tuple:
         r"(?:repo_url|repo)\s*[:=]\s*(https?://[^\s\n\r]+)", description, re.IGNORECASE
     )
     if m_repo:
-        candidate = m_repo.group(1).strip().rstrip("/")
+        candidate = m_repo.group(1).strip()
         if candidate:
-            repo_url = candidate
+            # Clean up trailing text but preserve #branch
+            repo_url = re.sub(r'[^\w\-./:#@?=&%]', '', candidate)
+            # Parse branch from URL
+            clean_repo_url, branch = parse_repo_url(repo_url)
+            repo_url = clean_repo_url
 
     # Search for requested_reviewers anywhere in the description text
     m_rev = re.search(r"requested_reviewers?\s*[:=]\s*([^\n\r]+)", description, re.IGNORECASE)
@@ -218,7 +269,11 @@ def _parse_description_metadata(description: str) -> tuple:
         # Split by comma and clean up trailing colons or symbols
         reviewers = [r.strip().rstrip(":") for r in val.split(",") if r.strip()]
 
-    return repo_url, reviewers
+    return {
+        "repo_url": repo_url,
+        "branch": branch,
+        "desc_reviewers": reviewers if reviewers else None
+    }
 
 
 def _dedupe_strings(values: Iterable[str]) -> list[str]:

@@ -1,7 +1,8 @@
 """
-Webhook handler for Git platform events (GitHub/GitLab/Bitbucket).
+Webhook handler for Git platform events (GitHub/GitLab/Bitbucket) and Jira status changes.
 
 Handles PR merge events to transition Jira issues to "Done" status.
+Handles Jira status changes to update frontend in real-time.
 """
 
 import re
@@ -13,6 +14,7 @@ from src.core.database.base import SessionLocal
 from src.core.logging.logger import get_logger
 from src.integrations.jira.jira_client import transition_jira_issue
 from src.models.execution import Execution
+from src.api.websocket import manager
 
 logger = get_logger("webhook")
 router = APIRouter()
@@ -97,6 +99,8 @@ async def github_webhook(request: Request):
         success = await transition_jira_issue(issue_key, "Done")
         if success:
             logger.info(f"Successfully transitioned {issue_key} to 'Done'")
+            # Broadcast status update to frontend
+            await manager.broadcast_jira_update(issue_key, "Done")
             return {"status": "success", "issue_key": issue_key}
         else:
             logger.warning(f"Failed to transition {issue_key} to 'Done'")
@@ -153,6 +157,8 @@ async def gitlab_webhook(request: Request):
         success = await transition_jira_issue(issue_key, "Done")
         if success:
             logger.info(f"Successfully transitioned {issue_key} to 'Done'")
+            # Broadcast status update to frontend
+            await manager.broadcast_jira_update(issue_key, "Done")
             return {"status": "success", "issue_key": issue_key}
         else:
             logger.warning(f"Failed to transition {issue_key} to 'Done'")
@@ -203,6 +209,8 @@ async def bitbucket_webhook(request: Request):
         success = await transition_jira_issue(issue_key, "Done")
         if success:
             logger.info(f"Successfully transitioned {issue_key} to 'Done'")
+            # Broadcast status update to frontend
+            await manager.broadcast_jira_update(issue_key, "Done")
             return {"status": "success", "issue_key": issue_key}
         else:
             logger.warning(f"Failed to transition {issue_key} to 'Done'")
@@ -210,4 +218,52 @@ async def bitbucket_webhook(request: Request):
 
     except Exception as e:
         logger.error(f"Error handling Bitbucket webhook: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/webhook/jira")
+async def jira_webhook(request: Request):
+    """
+    Handle Jira webhook events for status changes.
+
+    Specifically handles issue status transitions to update frontend in real-time.
+    """
+    try:
+        payload = await request.json()
+        event_type = request.headers.get("X-Atlassian-Token", "")
+
+        logger.info(f"Received Jira webhook: {event_type}")
+
+        # Extract issue key and status
+        issue = payload.get("issue", {})
+        issue_key = issue.get("key", "")
+        fields = issue.get("fields", {})
+        status = fields.get("status", {}).get("name", "")
+
+        if not issue_key:
+            logger.warning("No issue key in Jira webhook payload")
+            return {"status": "error", "message": "No issue key found"}
+
+        logger.info(f"Jira issue {issue_key} status changed to: {status}")
+
+        # Broadcast status update to all connected WebSocket clients
+        await manager.broadcast_jira_update(issue_key, status)
+
+        # If status is "Done", also update execution record in database
+        if status == "Done":
+            try:
+                db = SessionLocal()
+                execution = db.query(Execution).filter(Execution.issue_key == issue_key).first()
+                if execution:
+                    execution.status = "completed"
+                    db.commit()
+                    logger.info(f"Updated execution {execution.execution_id} to completed")
+                db.close()
+            except Exception as e:
+                logger.error(f"Error updating execution record: {e}")
+
+        return {"status": "success", "issue_key": issue_key, "status": status}
+
+    except Exception as e:
+        logger.error(f"Error handling Jira webhook: {e}")
         raise HTTPException(status_code=500, detail=str(e))

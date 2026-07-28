@@ -446,7 +446,12 @@ async def get_execution_logs(
 ):
     """
     Fetch structured execution log traces for a given execution run from DB (protected route).
+    Applies additional sanitization to ensure sensitive workflow details are hidden.
     """
+    from src.utils.log_storage import SENSITIVE_TAGS, ALLOWED_TAGS
+    
+    print(f"[SANITIZATION] API: Fetching logs for execution_id: {execution_id}")
+    
     db = SessionLocal()
     try:
         log_entry = db.query(ExecutionLog).filter(ExecutionLog.execution_id == execution_id).first()
@@ -465,17 +470,35 @@ async def get_execution_logs(
             try:
                 parsed_logs = json.loads(log_entry.log_content)
                 if isinstance(parsed_logs, list):
-                    return {"logs": parsed_logs}
+                    print(f"[SANITIZATION] API: Retrieved {len(parsed_logs)} logs from DB")
+                    # Apply additional sanitization when retrieving from DB
+                    sanitized_logs = []
+                    filtered_count = 0
+                    for log in parsed_logs:
+                        if isinstance(log, dict):
+                            tag = log.get("tag", "")
+                            # Filter out sensitive tags
+                            if tag in SENSITIVE_TAGS:
+                                filtered_count += 1
+                                print(f"[SANITIZATION] API: Filtered sensitive tag {tag} - {log.get('msg', '')[:50]}...")
+                                continue
+                            # Only allow allowed tags, default to tool
+                            final_tag = tag if tag in ALLOWED_TAGS else "tool"
+                            sanitized_logs.append({
+                                "t": log.get("t", ""),
+                                "level": log.get("level", "info"),
+                                "tag": final_tag,
+                                "msg": log.get("msg", ""),
+                            })
+                    print(f"[SANITIZATION] API: Returning {len(sanitized_logs)} logs, filtered {filtered_count}")
+                    return {"logs": sanitized_logs}
             except json.JSONDecodeError:
                 pass
 
-        # Default fallback logs if no specific entry in DB
+        # Default fallback logs if no specific entry in DB (sanitized)
         sample_logs = [
-            {"t": "10:24:01", "level": "info", "tag": "roadmap", "msg": "Roadmap generated (3 phases · Analysis, Implementation, Testing)"},
-            {"t": "10:24:03", "level": "info", "tag": "planner", "msg": "Phase 1: Analysis — 2 steps"},
             {"t": "10:24:08", "level": "info", "tag": "tool", "msg": f"read_file Recruitment-Management/Services/{execution_id}.java"},
             {"t": "10:24:14", "level": "info", "tag": "tool", "msg": f"write_file Recruitment-Management/Services/{execution_id}.java"},
-            {"t": "10:24:34", "level": "info", "tag": "checkpoint", "msg": f"Checkpoint saved: phase_1_step_2 (thread_{execution_id})"},
             {"t": "10:24:40", "level": "info", "tag": "git", "msg": f"git add -A && git commit -m 'fix: resolve issue {execution_id}'"},
             {"t": "10:24:58", "level": "info", "tag": "sanity", "msg": "Tests passed cleanly"},
             {"t": "10:25:02", "level": "info", "tag": "git", "msg": f"Pushed branch feature/{execution_id}-fix"},

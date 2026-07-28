@@ -10,6 +10,10 @@ from src.core.logging.logger import get_logger
 logger = get_logger("websocket")
 router = APIRouter()
 
+# Sensitive tags to filter from user-facing logs
+SENSITIVE_TAGS = {"roadmap", "planner", "checkpoint"}
+ALLOWED_TAGS = {"tool", "git", "sanity", "jira", "llm"}
+
 # Store active WebSocket connections by execution_id
 active_connections: Dict[str, WebSocket] = {}
 
@@ -33,12 +37,32 @@ class ConnectionManager:
         logger.info(f"WebSocket disconnected for execution: {execution_id}")
 
     async def send_log(self, execution_id: str, log_data: dict):
-        """Send a log entry to the specific execution's WebSocket."""
+        """Send a log entry to the specific execution's WebSocket.
+        
+        Filters out sensitive tags before sending to user.
+        """
+        # Filter sensitive tags from real-time logs
+        tag = log_data.get("tag", "")
+        if tag in SENSITIVE_TAGS:
+            print(f"[SANITIZATION] WebSocket: Filtered sensitive tag {tag} - {log_data.get('msg', '')[:50]}...")
+            return  # Don't send sensitive workflow internals to user
+        
+        # Only allow allowed tags, default to tool
+        final_tag = tag if tag in ALLOWED_TAGS else "tool"
+        sanitized_data = {
+            "t": log_data.get("t", ""),
+            "level": log_data.get("level", "info"),
+            "tag": final_tag,
+            "msg": log_data.get("msg", ""),
+        }
+        
+        print(f"[SANITIZATION] WebSocket: Streaming event - tag: {final_tag}, msg: {log_data.get('msg', '')[:50]}...")
+        
         if execution_id in self.active_connections:
             try:
                 await self.active_connections[execution_id].send_json({
                     "type": "log",
-                    "data": log_data,
+                    "data": sanitized_data,
                 })
             except Exception as e:
                 logger.error(f"Error sending log to WebSocket: {e}")
@@ -70,6 +94,24 @@ class ConnectionManager:
                 logger.error(f"Error sending completion to WebSocket: {e}")
             finally:
                 self.disconnect(execution_id)
+
+    async def broadcast_jira_update(self, issue_key: str, status: str):
+        """Broadcast Jira status update to all connected clients."""
+        message = {
+            "type": "jira_status",
+            "issue_key": issue_key,
+            "status": status,
+        }
+        
+        logger.info(f"Broadcasting Jira status update: {issue_key} -> {status}")
+        
+        # Send to all active connections
+        for exec_id, websocket in self.active_connections.items():
+            try:
+                await websocket.send_json(message)
+            except Exception as e:
+                logger.error(f"Error broadcasting to {exec_id}: {e}")
+                self.disconnect(exec_id)
 
 
 manager = ConnectionManager()

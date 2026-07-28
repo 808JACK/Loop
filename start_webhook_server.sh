@@ -4,7 +4,7 @@
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
 cd "$DIR"
 
-PORT=${1:-8000}
+PORT=${1:-8080}
 
 # Kill any existing webhook server on port $PORT
 lsof -ti:$PORT | xargs kill -9 2>/dev/null || true

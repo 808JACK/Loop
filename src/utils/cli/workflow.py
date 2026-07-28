@@ -162,7 +162,7 @@ async def run_workflow(issue: dict) -> str:
     from src.settings import settings
 
     repo_url = issue.get("repo_url") or settings.default_repo_url
-    branch = "main"
+    branch = issue.get("branch")
 
     print(f"\n  {GREEN}🚀{RESET}  Starting workflow for {BOLD}{issue['key']}{RESET}...")
     print(f"  {DIM}Execution ID: {execution_id}{RESET}")

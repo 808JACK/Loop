@@ -14,45 +14,60 @@ from src.core.database.base import SessionLocal
 from src.models.execution_log import ExecutionLog
 
 
-ALLOWED_TAGS = {"tool", "git", "sanity", "checkpoint", "jira", "llm", "roadmap", "planner"}
+ALLOWED_TAGS = {"tool", "git", "sanity", "jira", "llm", "roadmap", "planner", "checkpoint"}
 INTERNAL_KEYWORDS = ["system_prompt", "workflow_definition", "internal_agent_state", "prompt_template"]
+SENSITIVE_TAGS = {"roadmap", "planner", "checkpoint"}
 
 
 def parse_and_sanitize_logs(raw_input: str) -> list[dict]:
     """
-    Parse raw terminal logs or JSON strings and filter out internal workflow secrets.
-
-    Returns clean, user-facing event objects with fields: {t, level, tag, msg}.
+    Parse raw terminal logs or JSON strings and store ALL logs for developer access.
+    
+    Returns all event objects with fields: {t, level, tag, msg}.
+    Only filters internal keywords (system_prompt, etc.) - stores ALL tags including sensitive ones.
+    Sanitization for users happens at API retrieval layer.
     """
     if not raw_input or not raw_input.strip():
         return []
 
-    # If already a JSON array of events, filter secret keywords
+    # If already a JSON array of events, store all except internal keywords
     if raw_input.strip().startswith("[") and raw_input.strip().endswith("]"):
         try:
             items = json.loads(raw_input)
-            sanitized = []
+            all_events = []
+            filtered_count = 0
             for item in items:
                 if isinstance(item, dict) and "msg" in item:
                     msg = item.get("msg", "")
+                    tag = item.get("tag", "")
+                    # Only filter internal keywords - store everything else including sensitive tags
                     if any(kw in msg.lower() for kw in INTERNAL_KEYWORDS):
+                        filtered_count += 1
+                        print(f"[STORAGE] Filtered internal keyword: {tag} - {msg[:50]}...")
                         continue
-                    sanitized.append({
+                    # Store all tags including sensitive ones for developer access
+                    final_tag = tag if tag in ALLOWED_TAGS else "tool"
+                    all_events.append({
                         "t": item.get("t", datetime.utcnow().strftime("%H:%M:%S")),
                         "level": item.get("level", "info"),
-                        "tag": item.get("tag", "tool") if item.get("tag") in ALLOWED_TAGS else "tool",
+                        "tag": final_tag,
                         "msg": msg,
                     })
-            return sanitized
+            print(f"[STORAGE] Parsed {len(items)} logs, filtered {filtered_count} internal keywords, stored {len(all_events)}")
+            return all_events
         except json.JSONDecodeError:
             pass
 
     # Parse raw line-by-line log format
     events = []
     lines = raw_input.splitlines()
+    filtered_count = 0
     for line in lines:
         line_str = line.strip()
         if not line_str or any(kw in line_str.lower() for kw in INTERNAL_KEYWORDS):
+            if line_str:
+                filtered_count += 1
+                print(f"[STORAGE] Filtered internal keyword: {line_str[:50]}...")
             continue
 
         # Extract timestamp if present [HH:MM:SS]
@@ -72,14 +87,14 @@ def parse_and_sanitize_logs(raw_input: str) -> list[dict]:
             tag = "sanity"
         elif "Transitioned" in line_str or "Jira" in line_str or "KAN-" in line_str:
             tag = "jira"
+        elif "provider" in line_str or "LLM" in line_str:
+            tag = "llm"
         elif "Checkpoint" in line_str:
             tag = "checkpoint"
         elif "Roadmap" in line_str:
             tag = "roadmap"
         elif "Phase" in line_str:
             tag = "planner"
-        elif "provider" in line_str or "LLM" in line_str:
-            tag = "llm"
 
         events.append({
             "t": t_val,
@@ -88,6 +103,7 @@ def parse_and_sanitize_logs(raw_input: str) -> list[dict]:
             "msg": line_str[:300],  # Truncate overly verbose raw output
         })
 
+    print(f"[STORAGE] Parsed {len(lines)} raw lines, filtered {filtered_count} internal keywords, stored {len(events)}")
     return events
 
 
@@ -168,8 +184,12 @@ def append_execution_event(
 ) -> bool:
     """
     Append a single execution log event in real-time as the workflow executes.
+    Stores ALL logs for developer access - only filters internal keywords.
+    Sanitization for users happens at API retrieval layer.
     """
+    # Only filter internal keywords - store everything else including sensitive tags
     if any(kw in msg.lower() for kw in INTERNAL_KEYWORDS):
+        print(f"[STORAGE] Real-time: Filtered internal keyword - {msg[:50]}...")
         return False  # Filter secret workflow internals
 
     event = {
@@ -178,6 +198,8 @@ def append_execution_event(
         "tag": tag if tag in ALLOWED_TAGS else "tool",
         "msg": msg,
     }
+
+    print(f"[STORAGE] Real-time: Storing event - tag: {event['tag']}, msg: {msg[:50]}...")
 
     db = SessionLocal()
     try:

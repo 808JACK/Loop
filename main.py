@@ -18,12 +18,44 @@ Usage:
 import argparse
 import asyncio
 import os
+import subprocess
 import sys
 
 # ── Load environment variables directly from .env ─────────────────────────────
 from dotenv import load_dotenv
 
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"), override=True)
+
+# ── Initial setup ─────────────────────────────────────────────────────────────
+def ensure_initial_setup():
+    """Ensure uv sync, database, and required folders are set up."""
+    # Run uv sync
+    try:
+        subprocess.run(["uv", "sync"], check=True, capture_output=True)
+        print("✓ uv sync completed")
+    except subprocess.CalledProcessError as e:
+        print(f"Warning: uv sync failed: {e}")
+    
+    # Create database
+    try:
+        subprocess.run(["uv", "run", "python", "src/scripts/setup_database.py"], check=True, capture_output=True)
+        print("✓ Database setup completed")
+    except subprocess.CalledProcessError as e:
+        print(f"Warning: Database setup failed: {e}")
+    
+    # Create required directories
+    base = settings.worktree_base_path
+    dirs_to_create = [
+        base,
+        os.path.join(base, "repos"),
+        os.path.join(base, "runs"),
+        "logs"
+    ]
+    
+    for dir_path in dirs_to_create:
+        os.makedirs(dir_path, exist_ok=True)
+    
+    print("✓ Required directories created")
 
 # ── bootstrap settings and app imports ───────────────────────────────────────
 sys.path.insert(0, os.path.dirname(__file__))
@@ -113,6 +145,9 @@ async def main() -> None:
         server = uvicorn.Server(config)
         await server.serve()
         return
+
+    # ── initial setup ───────────────────────────────────────────────────────────
+    ensure_initial_setup()
 
     # ── banner ────────────────────────────────────────────────────────────────
     print_banner()

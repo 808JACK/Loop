@@ -21,6 +21,7 @@ build/
 /ai_sdlc_automation.egg-info
 /.mypy_cache
 /.ruff_cache
+/worktree
 # Virtual environment (uv uses .venv by default)
 .venv/
 venv/

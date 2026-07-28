@@ -43,7 +43,8 @@ def _render_picker(issues: list[dict], selected: int, scroll_offset: int, max_vi
         summary = issue["summary"][:60] + ("…" if len(issue["summary"]) > 60 else "")
         priority = issue.get("priority", "?")
         status = issue.get("status", "?")
-        repo = issue.get("repo_url") or issue.get("repo_name") or "–"
+        repo_url = issue.get("repo_url", "–")
+        branch = issue.get("branch", "–")
         reviewers = ", ".join(issue.get("requested_reviewers", [])) or "–"
 
         if is_selected:
@@ -52,7 +53,8 @@ def _render_picker(issues: list[dict], selected: int, scroll_offset: int, max_vi
                 f"       {DIM}Priority:{RESET} {pri_color}{priority:<10}{RESET}  "
                 f"{DIM}Status:{RESET} {sta_color}{status:<20}{RESET}"
             )
-            print(f"       {DIM}Repo:{RESET} {CYAN}{repo}{RESET}")
+            print(f"       {DIM}Repo:{RESET} {CYAN}{repo_url}{RESET}")
+            print(f"       {DIM}Branch:{RESET} {CYAN}{branch}{RESET}")
             if reviewers != "–":
                 print(f"       {DIM}Reviewers:{RESET} {MAGENTA}{reviewers}{RESET}")
             print()

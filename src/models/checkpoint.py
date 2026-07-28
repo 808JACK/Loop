@@ -20,7 +20,6 @@ class Checkpoint(Base):
     __tablename__ = "checkpoints"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    workspace_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     thread_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     checkpoint_data: Mapped[str] = mapped_column(Text, nullable=False)
     checkpoint_metadata: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -33,7 +32,6 @@ class Checkpoint(Base):
         """Convert checkpoint to dictionary."""
         return {
             "id": str(self.id),
-            "workspace_id": self.workspace_id,
             "thread_id": self.thread_id,
             "checkpoint_data": self.checkpoint_data,
             "checkpoint_metadata": self.checkpoint_metadata,

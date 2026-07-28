@@ -118,8 +118,9 @@ def git_manager_node(state: ExecutionState) -> ExecutionState:
         return state
 
     # 3. Create draft PR
+    pr_base_branch = state.get("pr_base_branch")
     pr_url = _create_pr(
-        repo_url, branch_name, issue_key, issue_summary, roadmap, changed_paths, requested_reviewers
+        repo_url, branch_name, issue_key, issue_summary, roadmap, changed_paths, requested_reviewers, pr_base_branch
     )
     state["pr_url"] = pr_url
     state["status"] = "pr_open"
@@ -251,27 +252,27 @@ def _parse_github_repo(repo_url: str):
 
 
 def _create_pr(
-    repo_url, branch_name, issue_key, issue_summary, roadmap, touched_paths=None, reviewers=None
+    repo_url, branch_name, issue_key, issue_summary, roadmap, touched_paths=None, reviewers=None, pr_base_branch=None
 ):
     platform = settings.git_platform
     if platform == "github":
         return _github_pr(
-            repo_url, branch_name, issue_key, issue_summary, roadmap, touched_paths, reviewers
+            repo_url, branch_name, issue_key, issue_summary, roadmap, touched_paths, reviewers, pr_base_branch
         )
     if platform == "gitlab":
         return _gitlab_pr(
-            repo_url, branch_name, issue_key, issue_summary, roadmap, touched_paths, reviewers
+            repo_url, branch_name, issue_key, issue_summary, roadmap, touched_paths, reviewers, pr_base_branch
         )
     if platform == "bitbucket":
         return _bitbucket_pr(
-            repo_url, branch_name, issue_key, issue_summary, roadmap, touched_paths, reviewers
+            repo_url, branch_name, issue_key, issue_summary, roadmap, touched_paths, reviewers, pr_base_branch
         )
     logger.warning(f"Unknown git_platform '{platform}'")
     return None
 
 
 def _github_pr(
-    repo_url, branch_name, issue_key, issue_summary, roadmap, touched_paths=None, reviewers=None
+    repo_url, branch_name, issue_key, issue_summary, roadmap, touched_paths=None, reviewers=None, pr_base_branch=None
 ):
     token = settings.github_token
     if not token:
@@ -290,21 +291,24 @@ def _github_pr(
         "X-GitHub-Api-Version": "2022-11-28",
     }
 
-    # Auto-detect default branch if base is master vs main
-    base_branch = "main"
-    try:
-        repo_resp = httpx.get(
-            f"https://api.github.com/repos/{owner}/{repo}",
-            headers=headers,
-            timeout=10,
-        )
-        if repo_resp.status_code == 200:
-            base_branch = repo_resp.json().get("default_branch") or "main"
-        else:
+    # Use pr_base_branch from state if available, otherwise detect default
+    base_branch = pr_base_branch
+    if not base_branch:
+        # Auto-detect default branch if base is master vs main
+        base_branch = "main"
+        try:
+            repo_resp = httpx.get(
+                f"https://api.github.com/repos/{owner}/{repo}",
+                headers=headers,
+                timeout=10,
+            )
+            if repo_resp.status_code == 200:
+                base_branch = repo_resp.json().get("default_branch") or "main"
+            else:
+                base_branch = "master"
+        except Exception as ex:
+            logger.warning(f"Could not fetch repo default branch from GitHub: {ex}")
             base_branch = "master"
-    except Exception as ex:
-        logger.warning(f"Could not fetch repo default branch from GitHub: {ex}")
-        base_branch = "master"
 
     try:
         summary_text = " ".join((issue_summary or "").split()).strip()
@@ -361,7 +365,7 @@ def _github_pr(
 
 
 def _gitlab_pr(
-    repo_url, branch_name, issue_key, issue_summary, roadmap, touched_paths=None, reviewers=None
+    repo_url, branch_name, issue_key, issue_summary, roadmap, touched_paths=None, reviewers=None, pr_base_branch=None
 ):
     token = settings.gitlab_token
     if not token:
@@ -379,6 +383,10 @@ def _gitlab_pr(
     summary_text = summary_text or "AI-generated implementation"
     commit_type = infer_commit_type(issue_summary, roadmap)
     title_str = f"Draft: {commit_type}: {summary_text}"
+    
+    # Use pr_base_branch if provided, otherwise default to main
+    target_branch = pr_base_branch or "main"
+    
     try:
         resp = httpx.post(
             f"https://gitlab.com/api/v4/projects/{project_path}/merge_requests",
@@ -387,7 +395,7 @@ def _gitlab_pr(
                 "title": title_str[:200],
                 "description": _build_pr_body(issue_key, issue_summary, roadmap, touched_paths),
                 "source_branch": branch_name,
-                "target_branch": "main",
+                "target_branch": target_branch,
                 "draft": True,
             },
             timeout=20,
@@ -400,7 +408,7 @@ def _gitlab_pr(
 
 
 def _bitbucket_pr(
-    repo_url, branch_name, issue_key, issue_summary, roadmap, touched_paths=None, reviewers=None
+    repo_url, branch_name, issue_key, issue_summary, roadmap, touched_paths=None, reviewers=None, pr_base_branch=None
 ):
     token = settings.bitbucket_token
     username = settings.bitbucket_username
@@ -417,6 +425,10 @@ def _bitbucket_pr(
     summary_text = " ".join((issue_summary or "").split()).strip()
     summary_text = summary_text or "AI-generated implementation"
     title_str = f"{infer_commit_type(issue_summary, roadmap)}: {summary_text}"
+    
+    # Use pr_base_branch if provided, otherwise default to main
+    target_branch = pr_base_branch or "main"
+    
     try:
         resp = httpx.post(
             f"https://api.bitbucket.org/2.0/repositories/{workspace}/{repo_slug}/pullrequests",
@@ -425,7 +437,7 @@ def _bitbucket_pr(
                 "title": title_str[:200],
                 "description": _build_pr_body(issue_key, issue_summary, roadmap, touched_paths),
                 "source": {"branch": {"name": branch_name}},
-                "destination": {"branch": {"name": "main"}},
+                "destination": {"branch": {"name": target_branch}},
                 "draft": True,
             },
             timeout=20,
